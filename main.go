@@ -88,6 +88,8 @@ func main() {
 			log.Fatalf("error opening file %s: %s", f.fullPath, err.Error())
 		}
 
+		defer in.Close()
+
 		split := strings.Split(f.fullPath, ".jack")
 		fnOut := split[0] + ".xml"
 
@@ -95,6 +97,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("error opening file %s: %s", fnOut, err.Error())
 		}
+
+		defer out.Close()
 
 		t := tokenizer.New(in)
 		c := compilationengine.New(t, out)
