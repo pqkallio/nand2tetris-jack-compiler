@@ -1,7 +1,5 @@
 package symbols
 
-import "log"
-
 type Table struct {
 	classTable      *table
 	subroutineTable *table
@@ -45,17 +43,22 @@ func (t *Table) Get(name string) *Entry {
 	var e *Entry
 
 	if e, err = t.subroutineTable.Get(name); err == nil {
-		log.Printf("subroutine table: %+v", e)
 		return e
 	}
-	log.Printf("%s", err)
 
 	e, _ = t.classTable.Get(name)
 
-	log.Printf("class table: %+v", e)
 	return e
 }
 
 func (t *Table) SwitchSubroutineTo(subroutineName string) {
 	t.subroutineTable = newLocalTable(subroutineScopes...)
+}
+
+func (t *Table) GetSymbolCount(scope Scope) uint {
+	if scope.In(classScopes...) {
+		return t.classTable.GetSymbolCount(scope)
+	}
+
+	return t.subroutineTable.GetSymbolCount(scope)
 }

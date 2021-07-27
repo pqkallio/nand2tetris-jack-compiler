@@ -1,6 +1,10 @@
 package tokenizer
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/pqkallio/nand2tetris-jack-compiler/vm"
+)
 
 type TokenType int
 
@@ -87,6 +91,27 @@ func (t Terminal) IsSymbol(ss ...string) bool {
 	}
 
 	return false
+}
+
+func (t Terminal) VMOp() vm.Op {
+	switch t.Symbol {
+	case "+":
+		return vm.Add
+	case "-":
+		return vm.Sub
+	case "&":
+		return vm.And
+	case "|":
+		return vm.Or
+	case "=":
+		return vm.Eq
+	case "<":
+		return vm.Lt
+	case ">":
+		return vm.Gt
+	default:
+		return ""
+	}
 }
 
 func (t Terminal) String() string {

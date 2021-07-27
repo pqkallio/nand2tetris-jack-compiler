@@ -9,6 +9,7 @@ import (
 
 	"github.com/pqkallio/nand2tetris-jack-compiler/compilationengine"
 	"github.com/pqkallio/nand2tetris-jack-compiler/tokenizer"
+	"github.com/pqkallio/nand2tetris-jack-compiler/vm"
 )
 
 const (
@@ -82,30 +83,42 @@ func main() {
 	}
 
 	for _, f := range data.files {
-		log.Printf("compiling file %s", f.file.Name())
-		in, err := os.Open(f.fullPath)
-		if err != nil {
-			log.Fatalf("error opening file %s: %s", f.fullPath, err.Error())
-		}
+		compileFile(&f)
+	}
+}
 
-		defer in.Close()
+func compileFile(f *fileInfo) {
+	log.Printf("compiling file %s", f.file.Name())
+	in, err := os.Open(f.fullPath)
+	if err != nil {
+		log.Fatalf("error opening file %s: %s", f.fullPath, err)
+	}
 
-		split := strings.Split(f.fullPath, ".jack")
-		fnOut := split[0] + ".xml"
+	defer in.Close()
 
-		out, err := os.Create(fnOut)
-		if err != nil {
-			log.Fatalf("error opening file %s: %s", fnOut, err.Error())
-		}
+	split := strings.Split(f.fullPath, ".jack")
+	xmlOutName := split[0] + ".xml"
+	vmOutName := split[0] + ".vm"
 
-		defer out.Close()
+	xmlOut, err := os.Create(xmlOutName)
+	if err != nil {
+		log.Fatalf("error opening file %s: %s", xmlOutName, err)
+	}
 
-		t := tokenizer.New(in)
-		c := compilationengine.New(t, out)
+	defer xmlOut.Close()
 
-		err = c.Compile()
-		if err != nil {
-			log.Fatalf("compilation of file %s failed: %s", f.fullPath, err.Error())
-		}
+	vmOut, err := os.Create(vmOutName)
+	if err != nil {
+		log.Fatalf("error opening file %s: %s", vmOutName, err)
+	}
+
+	vmWriter := vm.New(vmOut)
+
+	t := tokenizer.New(in)
+	c := compilationengine.New(t, vmWriter, xmlOut)
+
+	err = c.Compile()
+	if err != nil {
+		log.Fatalf("compilation of file %s failed: %s", f.fullPath, err.Error())
 	}
 }

@@ -1,5 +1,7 @@
 package symbols
 
+import "github.com/pqkallio/nand2tetris-jack-compiler/vm"
+
 type Scope int
 
 const (
@@ -32,6 +34,19 @@ func (s Scope) In(ss ...Scope) bool {
 	}
 
 	return false
+}
+
+func (s Scope) ToVMMemSeg() vm.MemSeg {
+	switch s {
+	case Field:
+		return vm.This
+	case Static:
+		return vm.Static
+	case Argument:
+		return vm.Arg
+	default:
+		return vm.Local
+	}
 }
 
 type Entry struct {

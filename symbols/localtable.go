@@ -52,3 +52,11 @@ func (l *table) Get(name string) (*Entry, error) {
 
 	return e, nil
 }
+
+func (t *table) GetSymbolCount(scope Scope) uint {
+	if n, exists := t.idxs[scope]; exists {
+		return n
+	}
+
+	return 0
+}

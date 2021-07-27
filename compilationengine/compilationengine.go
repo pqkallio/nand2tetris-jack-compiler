@@ -3,20 +3,24 @@ package compilationengine
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/pqkallio/nand2tetris-jack-compiler/symbols"
 	"github.com/pqkallio/nand2tetris-jack-compiler/tokenizer"
+	"github.com/pqkallio/nand2tetris-jack-compiler/vm"
 )
 
 type Service struct {
-	t  *tokenizer.Service
-	st *symbols.Table
-	f  *os.File
-	d  string
+	tokenizer   *tokenizer.Service
+	symbolTable *symbols.Table
+	vmWriter    *vm.Writer
+	xmlFile     *os.File
+	indentation string
+	className   string
 }
 
-func New(t *tokenizer.Service, output *os.File) *Service {
-	return &Service{t, symbols.New(), output, ""}
+func New(t *tokenizer.Service, vmWriter *vm.Writer, xmlOut *os.File) *Service {
+	return &Service{t, symbols.New(), vmWriter, xmlOut, "", ""}
 }
 
 func (s *Service) Compile() error {
@@ -42,6 +46,7 @@ func (s *Service) compileClass(t tokenizer.Terminal) error {
 	}
 
 	s.write(s.identifier(t))
+	s.className = t.Identifier
 
 	t, err = s.eatSymbol("{")
 	if err != nil {
@@ -80,7 +85,7 @@ func (s *Service) compileClass(t tokenizer.Terminal) error {
 func (s *Service) compileSubroutineDec() error {
 	tag := "subroutineDec"
 
-	t, err := s.eatKeyword("constructor", "function", "method")
+	tt, err := s.eatKeyword("constructor", "function", "method")
 	if err != nil {
 		return err
 	}
@@ -88,9 +93,9 @@ func (s *Service) compileSubroutineDec() error {
 	s.write(s.openingTag(tag))
 	s.indent()
 
-	s.write(s.keyword(t))
+	s.write(s.keyword(tt))
 
-	t, err = s.eatReturnType()
+	t, err := s.eatReturnType()
 	if err != nil {
 		return err
 	}
@@ -103,8 +108,9 @@ func (s *Service) compileSubroutineDec() error {
 	}
 
 	s.write(s.identifier(t))
+	funcName := t.Identifier
 
-	s.st.SwitchSubroutineTo(s.identifier(t))
+	s.symbolTable.SwitchSubroutineTo(s.identifier(t))
 
 	t, err = s.eatSymbol("(")
 	if err != nil {
@@ -125,7 +131,7 @@ func (s *Service) compileSubroutineDec() error {
 
 	s.write(s.symbol(t))
 
-	err = s.compileSubroutineBody()
+	err = s.compileSubroutineBody(funcName, tt.Keyword)
 	if err != nil {
 		return err
 	}
@@ -136,7 +142,7 @@ func (s *Service) compileSubroutineDec() error {
 	return nil
 }
 
-func (s *Service) compileSubroutineBody() error {
+func (s *Service) compileSubroutineBody(funcName, funcType string) error {
 	tag := "subroutineBody"
 
 	s.write(s.openingTag(tag))
@@ -156,6 +162,22 @@ func (s *Service) compileSubroutineBody() error {
 		}
 	}
 
+	nLocals := s.symbolTable.GetSymbolCount(symbols.Local)
+	s.vmWriter.WriteFunc(s.className+"."+funcName, nLocals)
+
+	switch funcType {
+	case "method":
+		// set the correct object to "this"
+		s.vmWriter.WritePush(vm.Arg, 0)
+		s.vmWriter.WritePop(vm.Pointer, 0)
+	case "constructor":
+		// allocate memory for the object
+		nFields := s.symbolTable.GetSymbolCount(symbols.Field)
+		s.vmWriter.WritePush(vm.Const, nFields)
+		s.vmWriter.WriteCall("Memory.alloc", 1)
+		s.vmWriter.WritePop(vm.Pointer, 0)
+	}
+
 	err = s.compileStatements()
 	if err != nil {
 		return err
@@ -164,6 +186,10 @@ func (s *Service) compileSubroutineBody() error {
 	t, err = s.eatSymbol("}")
 	if err != nil {
 		return err
+	}
+
+	if funcType == "constructor" {
+		s.vmWriter.WritePush(vm.Pointer, 0)
 	}
 
 	s.write(s.symbol(t))
@@ -210,8 +236,9 @@ func (s *Service) compileStatements() error {
 	return nil
 }
 
-func (s *Service) compileExpressionList() error {
+func (s *Service) compileExpressionList() (uint, error) {
 	tag := "expressionList"
+	nArgs := uint(0)
 
 	s.write(s.openingTag(tag))
 	s.indent()
@@ -221,8 +248,10 @@ func (s *Service) compileExpressionList() error {
 		for {
 			err = s.compileExpression()
 			if err != nil {
-				return err
+				return 0, err
 			}
+
+			nArgs += 1
 
 			t, err := s.eatSymbol(",")
 			if err != nil {
@@ -232,13 +261,13 @@ func (s *Service) compileExpressionList() error {
 			s.write(s.symbol(t))
 		}
 	} else {
-		s.t.Rewind(0)
+		s.tokenizer.Rewind(0)
 	}
 
 	s.deindent()
 	s.write(s.closingTag(tag))
 
-	return nil
+	return nArgs, nil
 }
 
 func (s *Service) compileSubroutineCall() error {
@@ -246,6 +275,8 @@ func (s *Service) compileSubroutineCall() error {
 	if err != nil {
 		return err
 	}
+
+	id := t.Identifier
 
 	s.write(s.identifier(t))
 
@@ -263,6 +294,8 @@ func (s *Service) compileSubroutineCall() error {
 			return err
 		}
 
+		id += "." + t.Identifier
+
 		s.write(s.identifier(t))
 
 		t, err = s.eatSymbol("(")
@@ -274,7 +307,7 @@ func (s *Service) compileSubroutineCall() error {
 
 		fallthrough
 	case "(":
-		err = s.compileExpressionList()
+		nArgs, err := s.compileExpressionList()
 		if err != nil {
 			return err
 		}
@@ -284,10 +317,33 @@ func (s *Service) compileSubroutineCall() error {
 			return err
 		}
 
+		s.vmWriter.WriteCall(id, nArgs)
 		s.write(s.symbol(t))
 	}
 
 	return nil
+}
+
+func (s *Service) pushStringConstant(str string) {
+	strLen := uint(len(str))
+
+	s.vmWriter.WritePush(vm.Const, strLen)
+	s.vmWriter.WriteCall("String.new", 1)
+
+	for _, c := range str {
+		s.vmWriter.WritePush(vm.Const, uint(c))
+		s.vmWriter.WriteCall("String.appendChar", 2)
+	}
+}
+
+func (s *Service) pushKeywordConstant(c string) {
+	switch c {
+	case "true":
+		s.vmWriter.WritePush(vm.Const, 1)
+		s.vmWriter.WriteArithmetic(vm.Neg)
+	default:
+		s.vmWriter.WritePush(vm.Const, 0)
+	}
 }
 
 func (s *Service) compileTerm() error {
@@ -301,17 +357,22 @@ func (s *Service) compileTerm() error {
 	switch tt := t.Type; tt {
 	case tokenizer.IntegerConstant:
 		s.write(s.integerConstant(t))
+		i, _ := strconv.Atoi(t.IntegerConstant)
+		s.vmWriter.WritePush(vm.Const, uint(i))
 	case tokenizer.StringConstant:
 		s.write(s.stringConstant(t))
+		s.pushStringConstant(t.StringConstant)
 	case tokenizer.Keyword:
 		s.write(s.keyword(t))
+		s.pushKeywordConstant(t.Keyword)
 	case tokenizer.Identifier:
 		t2, err := s.eatSymbol("(", "[", ".")
 		if err != nil {
 			s.write(s.identifier(t))
-			e := s.st.Get(t.Identifier)
+			e := s.symbolTable.Get(t.Identifier)
 
 			s.write(s.memEntry(e))
+			s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
 
 			break
 		}
@@ -320,7 +381,7 @@ func (s *Service) compileTerm() error {
 		case ".":
 			fallthrough
 		case "(":
-			s.t.Rewind(1)
+			s.tokenizer.Rewind(1)
 
 			err = s.compileSubroutineCall()
 			if err != nil {
@@ -329,9 +390,11 @@ func (s *Service) compileTerm() error {
 		case "[":
 			s.write(s.identifier(t))
 
-			e := s.st.Get(t.Identifier)
+			e := s.symbolTable.Get(t.Identifier)
 
 			s.write(s.memEntry(e))
+
+			s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
 
 			s.write(s.symbol(t2))
 
@@ -344,6 +407,10 @@ func (s *Service) compileTerm() error {
 			if err != nil {
 				return err
 			}
+
+			s.vmWriter.WriteArithmetic(vm.Add)
+			s.vmWriter.WritePop(vm.Pointer, 1)
+			s.vmWriter.WritePush(vm.That, 0)
 
 			s.write(s.symbol(t))
 		}
@@ -398,6 +465,15 @@ func (s *Service) compileExpression() error {
 		if err != nil {
 			return err
 		}
+
+		switch t.Symbol {
+		case "*":
+			s.vmWriter.WriteCall("Math.multiply", 2)
+		case "/":
+			s.vmWriter.WriteCall("Math.divide", 2)
+		default:
+			s.vmWriter.WriteArithmetic(t.VMOp())
+		}
 	}
 
 	s.deindent()
@@ -418,7 +494,7 @@ func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
 	if err != nil {
 		s.compileExpression()
 	} else {
-		s.t.Rewind(0)
+		s.tokenizer.Rewind(0)
 	}
 
 	t, err = s.eatSymbol(";")
@@ -427,6 +503,8 @@ func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
 	}
 
 	s.write(s.symbol(t))
+
+	s.vmWriter.WriteReturn()
 
 	s.deindent()
 	s.write(s.closingTag(tag))
@@ -452,6 +530,8 @@ func (s *Service) compileDoStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
+	s.vmWriter.WritePop(vm.Temp, 0)
+
 	s.write(s.symbol(t))
 
 	s.deindent()
@@ -463,10 +543,15 @@ func (s *Service) compileDoStatement(t tokenizer.Terminal) error {
 func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 	tag := "whileStatement"
 
+	lblFalse := s.vmWriter.RegisterLabel("IF_FALSE")
+	lblTrue := s.vmWriter.RegisterLabel("IF_TRUE")
+
 	s.write(s.openingTag(tag))
 	s.indent()
 
 	s.write(s.keyword(t))
+
+	s.vmWriter.WriteLabel(lblTrue)
 
 	t, err := s.eatSymbol("(")
 	if err != nil {
@@ -487,6 +572,9 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 
 	s.write(s.symbol(t))
 
+	s.vmWriter.WriteArithmetic(vm.Not)
+	s.vmWriter.WriteIf(lblFalse)
+
 	t, err = s.eatSymbol("{")
 	if err != nil {
 		return err
@@ -499,10 +587,14 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
+	s.vmWriter.WriteGoto(lblTrue)
+
 	t, err = s.eatSymbol("}")
 	if err != nil {
 		return err
 	}
+
+	s.vmWriter.WriteLabel(lblFalse)
 
 	s.write(s.symbol(t))
 
@@ -516,6 +608,9 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 	tag := "ifStatement"
 
+	lblFalse := s.vmWriter.RegisterLabel("IF_FALSE")
+	lblTrue := s.vmWriter.RegisterLabel("IF_TRUE")
+
 	s.write(s.openingTag(tag))
 	s.indent()
 
@@ -540,6 +635,9 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 
 	s.write(s.symbol(t))
 
+	s.vmWriter.WriteArithmetic(vm.Not)
+	s.vmWriter.WriteIf(lblFalse)
+
 	t, err = s.eatSymbol("{")
 	if err != nil {
 		return err
@@ -557,7 +655,11 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
+	s.vmWriter.WriteGoto(lblTrue)
+
 	s.write(s.symbol(t))
+
+	s.vmWriter.WriteLabel(lblFalse)
 
 	t, err = s.eatKeyword("else")
 	if err == nil {
@@ -583,6 +685,8 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 		s.write(s.symbol(t))
 	}
 
+	s.vmWriter.WriteLabel(lblTrue)
+
 	s.deindent()
 	s.write(s.closingTag(tag))
 
@@ -604,7 +708,8 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 
 	s.write(s.identifier(t))
 
-	e := s.st.Get(t.Identifier)
+	e := s.symbolTable.Get(t.Identifier)
+	target := vm.MemEntry{e.Scope.ToVMMemSeg(), e.Idx}
 	s.write(s.memEntry(e))
 
 	t, err = s.eatSymbol("[", "=")
@@ -633,6 +738,11 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 		}
 
 		s.write(s.symbol(t))
+
+		s.vmWriter.WriteArithmetic(vm.Add)
+		s.vmWriter.WritePop(vm.Pointer, 1)
+
+		target = vm.MemEntry{vm.That, 0}
 	}
 
 	err = s.compileExpression()
@@ -644,6 +754,8 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 	if err != nil {
 		return err
 	}
+
+	s.vmWriter.WritePop(target.Seg, target.Idx)
 
 	s.write(s.symbol(t))
 
@@ -680,7 +792,7 @@ func (s *Service) compileVarDec() error {
 
 	s.write(s.identifier(id))
 
-	e := s.st.Define(id.Identifier, s.getType(tp), "local")
+	e := s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
 
 	s.write(s.memEntry(e))
 
@@ -699,7 +811,7 @@ func (s *Service) compileVarDec() error {
 
 		s.write(s.identifier(id))
 
-		e = s.st.Define(id.Identifier, s.getType(tp), "local")
+		e = s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
 
 		s.write(s.memEntry(e))
 
@@ -740,7 +852,7 @@ func (s *Service) compileParameterList() error {
 
 	s.write(s.identifier(id))
 
-	e := s.st.Define(id.Identifier, s.getType(tp), "arg")
+	e := s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
 	s.write(s.memEntry(e))
 
 	for {
@@ -765,7 +877,7 @@ func (s *Service) compileParameterList() error {
 
 		s.write(s.identifier(id))
 
-		e := s.st.Define(id.Identifier, s.getType(tp), "arg")
+		e := s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
 		s.write(s.memEntry(e))
 	}
 
@@ -802,7 +914,7 @@ func (s *Service) compileClassVarDec() error {
 
 	s.write(s.identifier(id))
 
-	e := s.st.Define(id.Identifier, s.getType(tp), sc.Keyword)
+	e := s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
 	s.write(s.memEntry(e))
 
 	t, err := s.eatSymbol(",", ";")
@@ -820,7 +932,7 @@ func (s *Service) compileClassVarDec() error {
 
 		s.write(s.identifier(id))
 
-		e = s.st.Define(id.Identifier, s.getType(tp), sc.Keyword)
+		e = s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
 		s.write(s.memEntry(e))
 
 		t, err = s.eatSymbol(",", ";")
@@ -838,22 +950,22 @@ func (s *Service) compileClassVarDec() error {
 }
 
 func (s *Service) write(str string) {
-	s.f.WriteString(str)
+	s.xmlFile.WriteString(str)
 }
 
 func (s *Service) indent() {
-	s.d = s.d + "  "
+	s.indentation = s.indentation + "  "
 }
 
 func (s *Service) deindent() {
-	if len(s.d) > 1 {
-		s.d = s.d[:len(s.d)-2]
+	if len(s.indentation) > 1 {
+		s.indentation = s.indentation[:len(s.indentation)-2]
 	}
 }
 
 func (s *Service) eat() tokenizer.Terminal {
-	s.t.Advance()
-	return s.t.ConsumeToken()
+	s.tokenizer.Advance()
+	return s.tokenizer.ConsumeToken()
 }
 
 func (s *Service) eatBinOp() (tokenizer.Terminal, error) {
@@ -861,47 +973,47 @@ func (s *Service) eatBinOp() (tokenizer.Terminal, error) {
 }
 
 func (s *Service) eatSymbol(ss ...string) (tokenizer.Terminal, error) {
-	s.t.Advance()
+	s.tokenizer.Advance()
 
-	if s.t.Token().IsSymbol(ss...) {
-		return s.t.ConsumeToken(), nil
+	if s.tokenizer.Token().IsSymbol(ss...) {
+		return s.tokenizer.ConsumeToken(), nil
 	}
 
-	return tokenizer.Terminal{}, fmt.Errorf("expected one of symbols %v but token was %s", ss, s.t.Token())
+	return tokenizer.Terminal{}, fmt.Errorf("expected one of symbols %v but token was %s", ss, s.tokenizer.Token())
 }
 
 func (s *Service) eatKeyword(ks ...string) (tokenizer.Terminal, error) {
-	s.t.Advance()
+	s.tokenizer.Advance()
 
-	if s.t.Token().IsKeyword(ks...) {
-		return s.t.ConsumeToken(), nil
+	if s.tokenizer.Token().IsKeyword(ks...) {
+		return s.tokenizer.ConsumeToken(), nil
 	}
 
-	return tokenizer.Terminal{}, fmt.Errorf("expected one of keywords %v but token was %s", ks, s.t.Token())
+	return tokenizer.Terminal{}, fmt.Errorf("expected one of keywords %v but token was %s", ks, s.tokenizer.Token())
 }
 
 func (s *Service) eatIdentifier() (tokenizer.Terminal, error) {
-	s.t.Advance()
+	s.tokenizer.Advance()
 
-	if s.t.Token().IsOfType(tokenizer.Identifier) {
-		return s.t.ConsumeToken(), nil
+	if s.tokenizer.Token().IsOfType(tokenizer.Identifier) {
+		return s.tokenizer.ConsumeToken(), nil
 	}
 
-	return tokenizer.Terminal{}, fmt.Errorf("expected identifier but token was %s", s.t.Token())
+	return tokenizer.Terminal{}, fmt.Errorf("expected identifier but token was %s", s.tokenizer.Token())
 }
 
 func (s *Service) eatType(ts ...string) (tokenizer.Terminal, error) {
-	s.t.Advance()
+	s.tokenizer.Advance()
 
-	if s.t.Token().IsOfType(tokenizer.Identifier) {
-		return s.t.ConsumeToken(), nil
+	if s.tokenizer.Token().IsOfType(tokenizer.Identifier) {
+		return s.tokenizer.ConsumeToken(), nil
 	}
 
-	if s.t.Token().IsKeyword(ts...) {
-		return s.t.ConsumeToken(), nil
+	if s.tokenizer.Token().IsKeyword(ts...) {
+		return s.tokenizer.ConsumeToken(), nil
 	}
 
-	return tokenizer.Terminal{}, fmt.Errorf("expected a type but token was %s", s.t.Token())
+	return tokenizer.Terminal{}, fmt.Errorf("expected a type but token was %s", s.tokenizer.Token())
 }
 
 func (s *Service) eatVarType() (tokenizer.Terminal, error) {
@@ -953,13 +1065,13 @@ func (s *Service) getType(t tokenizer.Terminal) string {
 }
 
 func (s *Service) tagged(tag, val string) string {
-	return fmt.Sprintf("%s<%s> %s </%s>\n", s.d, tag, val, tag)
+	return fmt.Sprintf("%s<%s> %s </%s>\n", s.indentation, tag, val, tag)
 }
 
 func (s *Service) openingTag(tag string) string {
-	return s.d + "<" + tag + ">\n"
+	return s.indentation + "<" + tag + ">\n"
 }
 
 func (s *Service) closingTag(tag string) string {
-	return s.d + "</" + tag + ">\n"
+	return s.indentation + "</" + tag + ">\n"
 }
