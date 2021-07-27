@@ -97,15 +97,7 @@ func compileFile(f *fileInfo) {
 	defer in.Close()
 
 	split := strings.Split(f.fullPath, ".jack")
-	xmlOutName := split[0] + ".xml"
 	vmOutName := split[0] + ".vm"
-
-	xmlOut, err := os.Create(xmlOutName)
-	if err != nil {
-		log.Fatalf("error opening file %s: %s", xmlOutName, err)
-	}
-
-	defer xmlOut.Close()
 
 	vmOut, err := os.Create(vmOutName)
 	if err != nil {
@@ -115,7 +107,7 @@ func compileFile(f *fileInfo) {
 	vmWriter := vm.New(vmOut)
 
 	t := tokenizer.New(in)
-	c := compilationengine.New(t, vmWriter, xmlOut)
+	c := compilationengine.New(t, vmWriter)
 
 	err = c.Compile()
 	if err != nil {

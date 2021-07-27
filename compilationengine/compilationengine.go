@@ -2,7 +2,6 @@ package compilationengine
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 
 	"github.com/pqkallio/nand2tetris-jack-compiler/symbols"
@@ -14,13 +13,11 @@ type Service struct {
 	tokenizer   *tokenizer.Service
 	symbolTable *symbols.Table
 	vmWriter    *vm.Writer
-	xmlFile     *os.File
-	indentation string
 	className   string
 }
 
-func New(t *tokenizer.Service, vmWriter *vm.Writer, xmlOut *os.File) *Service {
-	return &Service{t, symbols.New(), vmWriter, xmlOut, "", ""}
+func New(t *tokenizer.Service, vmWriter *vm.Writer) *Service {
+	return &Service{t, symbols.New(), vmWriter, ""}
 }
 
 func (s *Service) Compile() error {
@@ -33,27 +30,17 @@ func (s *Service) Compile() error {
 }
 
 func (s *Service) compileClass(t tokenizer.Terminal) error {
-	tag := "class"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
-
 	t, err := s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(t))
 	s.className = t.Identifier
 
 	t, err = s.eatSymbol("{")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	for {
 		err = s.compileClassVarDec()
@@ -74,50 +61,33 @@ func (s *Service) compileClass(t tokenizer.Terminal) error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileSubroutineDec() error {
-	tag := "subroutineDec"
-
 	tt, err := s.eatKeyword("constructor", "function", "method")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(tt))
 
 	t, err := s.eatReturnType()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.tType(t))
-
 	t, err = s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(t))
 	funcName := t.Identifier
 
-	s.symbolTable.SwitchSubroutineTo(s.identifier(t))
+	s.symbolTable.SwitchSubroutineTo(t.Identifier)
 
 	t, err = s.eatSymbol("(")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	err = s.compileParameterList()
 	if err != nil {
@@ -129,31 +99,19 @@ func (s *Service) compileSubroutineDec() error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	err = s.compileSubroutineBody(funcName, tt.Keyword)
 	if err != nil {
 		return err
 	}
 
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileSubroutineBody(funcName, funcType string) error {
-	tag := "subroutineBody"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	t, err := s.eatSymbol("{")
+	_, err := s.eatSymbol("{")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	for {
 		err = s.compileVarDec()
@@ -183,7 +141,7 @@ func (s *Service) compileSubroutineBody(funcName, funcType string) error {
 		return err
 	}
 
-	t, err = s.eatSymbol("}")
+	_, err = s.eatSymbol("}")
 	if err != nil {
 		return err
 	}
@@ -192,20 +150,10 @@ func (s *Service) compileSubroutineBody(funcName, funcType string) error {
 		s.vmWriter.WritePush(vm.Pointer, 0)
 	}
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileStatements() error {
-	tag := "statements"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
 	for {
 		t, err := s.eatKeyword("let", "if", "while", "do", "return")
 		if err != nil {
@@ -230,18 +178,11 @@ func (s *Service) compileStatements() error {
 		}
 	}
 
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileExpressionList() (uint, error) {
-	tag := "expressionList"
 	nArgs := uint(0)
-
-	s.write(s.openingTag(tag))
-	s.indent()
 
 	_, err := s.eatSymbol(")")
 	if err != nil {
@@ -253,19 +194,14 @@ func (s *Service) compileExpressionList() (uint, error) {
 
 			nArgs += 1
 
-			t, err := s.eatSymbol(",")
+			_, err := s.eatSymbol(",")
 			if err != nil {
 				break
 			}
-
-			s.write(s.symbol(t))
 		}
 	} else {
 		s.tokenizer.Rewind(0)
 	}
-
-	s.deindent()
-	s.write(s.closingTag(tag))
 
 	return nArgs, nil
 }
@@ -278,14 +214,10 @@ func (s *Service) compileSubroutineCall() error {
 
 	id := t.Identifier
 
-	s.write(s.identifier(t))
-
 	t, err = s.eatSymbol(".", "(")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	switch sym := t.Symbol; sym {
 	case ".":
@@ -296,14 +228,10 @@ func (s *Service) compileSubroutineCall() error {
 
 		id += "." + t.Identifier
 
-		s.write(s.identifier(t))
-
 		t, err = s.eatSymbol("(")
 		if err != nil {
 			return err
 		}
-
-		s.write(s.symbol(t))
 
 		fallthrough
 	case "(":
@@ -318,7 +246,6 @@ func (s *Service) compileSubroutineCall() error {
 		}
 
 		s.vmWriter.WriteCall(id, nArgs)
-		s.write(s.symbol(t))
 	}
 
 	return nil
@@ -347,31 +274,21 @@ func (s *Service) pushKeywordConstant(c string) {
 }
 
 func (s *Service) compileTerm() error {
-	tag := "term"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
 	t := s.eat()
 
 	switch tt := t.Type; tt {
 	case tokenizer.IntegerConstant:
-		s.write(s.integerConstant(t))
 		i, _ := strconv.Atoi(t.IntegerConstant)
 		s.vmWriter.WritePush(vm.Const, uint(i))
 	case tokenizer.StringConstant:
-		s.write(s.stringConstant(t))
 		s.pushStringConstant(t.StringConstant)
 	case tokenizer.Keyword:
-		s.write(s.keyword(t))
 		s.pushKeywordConstant(t.Keyword)
 	case tokenizer.Identifier:
 		t2, err := s.eatSymbol("(", "[", ".")
 		if err != nil {
-			s.write(s.identifier(t))
 			e := s.symbolTable.Get(t.Identifier)
 
-			s.write(s.memEntry(e))
 			s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
 
 			break
@@ -388,15 +305,9 @@ func (s *Service) compileTerm() error {
 				return err
 			}
 		case "[":
-			s.write(s.identifier(t))
-
 			e := s.symbolTable.Get(t.Identifier)
 
-			s.write(s.memEntry(e))
-
 			s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
-
-			s.write(s.symbol(t2))
 
 			err = s.compileExpression()
 			if err != nil {
@@ -411,12 +322,8 @@ func (s *Service) compileTerm() error {
 			s.vmWriter.WriteArithmetic(vm.Add)
 			s.vmWriter.WritePop(vm.Pointer, 1)
 			s.vmWriter.WritePush(vm.That, 0)
-
-			s.write(s.symbol(t))
 		}
 	case tokenizer.Symbol:
-		s.write(s.symbol(t))
-
 		switch sym := t.Symbol; sym {
 		case "(":
 			err := s.compileExpression()
@@ -428,8 +335,6 @@ func (s *Service) compileTerm() error {
 			if err != nil {
 				return err
 			}
-
-			s.write(s.symbol(t))
 		case "-":
 			fallthrough
 		case "~":
@@ -440,18 +345,10 @@ func (s *Service) compileTerm() error {
 		}
 	}
 
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileExpression() error {
-	tag := "expression"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
 	err := s.compileTerm()
 	if err != nil {
 		return err
@@ -459,8 +356,6 @@ func (s *Service) compileExpression() error {
 
 	t, err := s.eatBinOp()
 	if err == nil {
-		s.write(s.symbol(t))
-
 		err = s.compileTerm()
 		if err != nil {
 			return err
@@ -476,20 +371,10 @@ func (s *Service) compileExpression() error {
 		}
 	}
 
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
-	tag := "returnStatement"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
-
 	_, err := s.eatSymbol(";")
 	if err != nil {
 		s.compileExpression()
@@ -502,24 +387,12 @@ func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	s.vmWriter.WriteReturn()
-
-	s.deindent()
-	s.write(s.closingTag(tag))
 
 	return nil
 }
 
 func (s *Service) compileDoStatement(t tokenizer.Terminal) error {
-	tag := "doStatement"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
-
 	err := s.compileSubroutineCall()
 	if err != nil {
 		return err
@@ -532,24 +405,12 @@ func (s *Service) compileDoStatement(t tokenizer.Terminal) error {
 
 	s.vmWriter.WritePop(vm.Temp, 0)
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
-	tag := "whileStatement"
-
 	lblFalse := s.vmWriter.RegisterLabel("IF_FALSE")
 	lblTrue := s.vmWriter.RegisterLabel("IF_TRUE")
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
 
 	s.vmWriter.WriteLabel(lblTrue)
 
@@ -558,8 +419,6 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	err = s.compileExpression()
 	if err != nil {
 		return err
@@ -570,8 +429,6 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	s.vmWriter.WriteArithmetic(vm.Not)
 	s.vmWriter.WriteIf(lblFalse)
 
@@ -579,8 +436,6 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	err = s.compileStatements()
 	if err != nil {
@@ -596,33 +451,18 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 
 	s.vmWriter.WriteLabel(lblFalse)
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
-
 }
 
 func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
-	tag := "ifStatement"
-
 	lblFalse := s.vmWriter.RegisterLabel("IF_FALSE")
 	lblTrue := s.vmWriter.RegisterLabel("IF_TRUE")
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
 
 	t, err := s.eatSymbol("(")
 	if err != nil {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	err = s.compileExpression()
 	if err != nil {
 		return err
@@ -633,8 +473,6 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	s.write(s.symbol(t))
-
 	s.vmWriter.WriteArithmetic(vm.Not)
 	s.vmWriter.WriteIf(lblFalse)
 
@@ -642,8 +480,6 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 	if err != nil {
 		return err
 	}
-
-	s.write(s.symbol(t))
 
 	err = s.compileStatements()
 	if err != nil {
@@ -657,20 +493,14 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 
 	s.vmWriter.WriteGoto(lblTrue)
 
-	s.write(s.symbol(t))
-
 	s.vmWriter.WriteLabel(lblFalse)
 
 	t, err = s.eatKeyword("else")
 	if err == nil {
-		s.write(s.keyword(t))
-
 		t, err = s.eatSymbol("{")
 		if err != nil {
 			return err
 		}
-
-		s.write(s.symbol(t))
 
 		err = s.compileStatements()
 		if err != nil {
@@ -681,43 +511,26 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 		if err != nil {
 			return err
 		}
-
-		s.write(s.symbol(t))
 	}
 
 	s.vmWriter.WriteLabel(lblTrue)
-
-	s.deindent()
-	s.write(s.closingTag(tag))
 
 	return nil
 }
 
 func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
-	tag := "letStatement"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
-
 	t, err := s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(t))
-
 	e := s.symbolTable.Get(t.Identifier)
 	target := vm.MemEntry{e.Scope.ToVMMemSeg(), e.Idx}
-	s.write(s.memEntry(e))
 
 	t, err = s.eatSymbol("[", "=")
 	if err != nil {
 		return nil
 	}
-
-	s.write(s.symbol(t))
 
 	if t.Symbol == "[" {
 		err = s.compileExpression()
@@ -730,14 +543,10 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 			return err
 		}
 
-		s.write(s.symbol(t))
-
 		t, err = s.eatSymbol("=")
 		if err != nil {
 			return err
 		}
-
-		s.write(s.symbol(t))
 
 		s.vmWriter.WriteArithmetic(vm.Add)
 		s.vmWriter.WritePop(vm.Pointer, 1)
@@ -757,44 +566,26 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 
 	s.vmWriter.WritePop(target.Seg, target.Idx)
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileVarDec() error {
-	tag := "varDec"
-
 	t, err := s.eatKeyword("var")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(t))
 
 	tp, err := s.eatVarType()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.tType(tp))
-
 	id, err := s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(id))
-
-	e := s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
-
-	s.write(s.memEntry(e))
+	s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
 
 	t, err = s.eatSymbol(",", ";")
 	if err != nil {
@@ -802,18 +593,12 @@ func (s *Service) compileVarDec() error {
 	}
 
 	for t.Symbol == "," {
-		s.write(s.symbol(t))
-
 		id, err = s.eatIdentifier()
 		if err != nil {
 			return err
 		}
 
-		s.write(s.identifier(id))
-
-		e = s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
-
-		s.write(s.memEntry(e))
+		s.symbolTable.Define(id.Identifier, s.getType(tp), "local")
 
 		t, err = s.eatSymbol(",", ";")
 		if err != nil {
@@ -821,101 +606,61 @@ func (s *Service) compileVarDec() error {
 		}
 	}
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
 }
 
 func (s *Service) compileParameterList() error {
-	tag := "parameterList"
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
 	tp, err := s.eatVarType()
 	if err != nil {
-		s.deindent()
-		s.write(s.closingTag(tag))
-
 		return nil
 	}
-
-	s.write(s.tType(tp))
 
 	id, err := s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(id))
-
-	e := s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
-	s.write(s.memEntry(e))
+	s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
 
 	for {
-		t, err := s.eatSymbol(",")
+		_, err = s.eatSymbol(",")
 		if err != nil {
 			break
 		}
-
-		s.write(s.symbol(t))
 
 		tp, err = s.eatVarType()
 		if err != nil {
 			return err
 		}
 
-		s.write(s.tType(tp))
-
 		id, err = s.eatIdentifier()
 		if err != nil {
 			return err
 		}
 
-		s.write(s.identifier(id))
-
-		e := s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
-		s.write(s.memEntry(e))
+		s.symbolTable.Define(id.Identifier, s.getType(tp), "arg")
 	}
-
-	s.deindent()
-	s.write(s.closingTag(tag))
 
 	return nil
 }
 
 func (s *Service) compileClassVarDec() error {
-	tag := "classVarDec"
-
 	sc, err := s.eatKeyword("static", "field")
 	if err != nil {
 		return err
 	}
-
-	s.write(s.openingTag(tag))
-	s.indent()
-
-	s.write(s.keyword(sc))
 
 	tp, err := s.eatVarType()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.tType(tp))
-
 	id, err := s.eatIdentifier()
 	if err != nil {
 		return err
 	}
 
-	s.write(s.identifier(id))
-
-	e := s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
-	s.write(s.memEntry(e))
+	s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
 
 	t, err := s.eatSymbol(",", ";")
 	if err != nil {
@@ -923,17 +668,12 @@ func (s *Service) compileClassVarDec() error {
 	}
 
 	for t.Symbol != ";" {
-		s.write(s.symbol(t))
-
 		id, err = s.eatIdentifier()
 		if err != nil {
 			return err
 		}
 
-		s.write(s.identifier(id))
-
-		e = s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
-		s.write(s.memEntry(e))
+		s.symbolTable.Define(id.Identifier, s.getType(tp), sc.Keyword)
 
 		t, err = s.eatSymbol(",", ";")
 		if err != nil {
@@ -941,26 +681,7 @@ func (s *Service) compileClassVarDec() error {
 		}
 	}
 
-	s.write(s.symbol(t))
-
-	s.deindent()
-	s.write(s.closingTag(tag))
-
 	return nil
-}
-
-func (s *Service) write(str string) {
-	s.xmlFile.WriteString(str)
-}
-
-func (s *Service) indent() {
-	s.indentation = s.indentation + "  "
-}
-
-func (s *Service) deindent() {
-	if len(s.indentation) > 1 {
-		s.indentation = s.indentation[:len(s.indentation)-2]
-	}
 }
 
 func (s *Service) eat() tokenizer.Terminal {
@@ -1024,54 +745,10 @@ func (s *Service) eatReturnType() (tokenizer.Terminal, error) {
 	return s.eatType("char", "boolean", "int", "void")
 }
 
-func (s *Service) symbol(t tokenizer.Terminal) string {
-	return s.tagged("symbol", getEscapedSymbol(t.Symbol))
-}
-
-func (s *Service) keyword(t tokenizer.Terminal) string {
-	return s.tagged("keyword", t.Keyword)
-}
-
-func (s *Service) identifier(t tokenizer.Terminal) string {
-	return s.tagged("identifier", t.Identifier)
-}
-
-func (s *Service) integerConstant(t tokenizer.Terminal) string {
-	return s.tagged("integerConstant", t.IntegerConstant)
-}
-
-func (s *Service) stringConstant(t tokenizer.Terminal) string {
-	return s.tagged("stringConstant", t.StringConstant)
-}
-
-func (s *Service) memEntry(e *symbols.Entry) string {
-	return s.tagged("memSeg", e.Scope.String()) + s.tagged("memIdx", fmt.Sprintf("%d", e.Idx))
-}
-
-func (s *Service) tType(t tokenizer.Terminal) string {
-	if t.Type == tokenizer.Keyword {
-		return s.keyword(t)
-	}
-
-	return s.identifier(t)
-}
-
 func (s *Service) getType(t tokenizer.Terminal) string {
 	if t.Type == tokenizer.Keyword {
 		return t.Keyword
 	}
 
 	return t.Identifier
-}
-
-func (s *Service) tagged(tag, val string) string {
-	return fmt.Sprintf("%s<%s> %s </%s>\n", s.indentation, tag, val, tag)
-}
-
-func (s *Service) openingTag(tag string) string {
-	return s.indentation + "<" + tag + ">\n"
-}
-
-func (s *Service) closingTag(tag string) string {
-	return s.indentation + "</" + tag + ">\n"
 }
