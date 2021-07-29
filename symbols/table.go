@@ -10,8 +10,8 @@ var subroutineScopes = []Scope{Argument, Local}
 
 func New() *Table {
 	return &Table{
-		newLocalTable(classScopes...),
-		newLocalTable(subroutineScopes...),
+		newLocalTable("", classScopes...),
+		newLocalTable("", subroutineScopes...),
 	}
 }
 
@@ -51,8 +51,8 @@ func (t *Table) Get(name string) *Entry {
 	return e
 }
 
-func (t *Table) SwitchSubroutineTo(subroutineName string) {
-	t.subroutineTable = newLocalTable(subroutineScopes...)
+func (t *Table) SwitchSubroutineTo(subroutineName, funcType string) {
+	t.subroutineTable = newLocalTable(funcType, subroutineScopes...)
 }
 
 func (t *Table) GetSymbolCount(scope Scope) uint {

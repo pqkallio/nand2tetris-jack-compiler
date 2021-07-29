@@ -8,8 +8,11 @@ type table struct {
 	scopes  []Scope
 }
 
-func newLocalTable(scopes ...Scope) *table {
+func newLocalTable(funcType string, scopes ...Scope) *table {
 	idxs := map[Scope]uint{}
+	if funcType == "method" {
+		idxs[Argument] = 1
+	}
 
 	return &table{map[string]*Entry{}, idxs, scopes}
 }

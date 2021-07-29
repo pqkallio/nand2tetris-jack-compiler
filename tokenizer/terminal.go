@@ -93,7 +93,7 @@ func (t Terminal) IsSymbol(ss ...string) bool {
 	return false
 }
 
-func (t Terminal) VMOp() vm.Op {
+func (t Terminal) VMBinOp() vm.Op {
 	switch t.Symbol {
 	case "+":
 		return vm.Add
@@ -109,6 +109,17 @@ func (t Terminal) VMOp() vm.Op {
 		return vm.Lt
 	case ">":
 		return vm.Gt
+	default:
+		return ""
+	}
+}
+
+func (t Terminal) VMUnOp() vm.Op {
+	switch t.Symbol {
+	case "~":
+		return vm.Not
+	case "-":
+		return vm.Neg
 	default:
 		return ""
 	}

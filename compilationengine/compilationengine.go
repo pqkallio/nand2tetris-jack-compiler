@@ -82,7 +82,7 @@ func (s *Service) compileSubroutineDec() error {
 
 	funcName := t.Identifier
 
-	s.symbolTable.SwitchSubroutineTo(t.Identifier)
+	s.symbolTable.SwitchSubroutineTo(t.Identifier, tt.Keyword)
 
 	t, err = s.eatSymbol("(")
 	if err != nil {
@@ -136,7 +136,7 @@ func (s *Service) compileSubroutineBody(funcName, funcType string) error {
 		s.vmWriter.WritePop(vm.Pointer, 0)
 	}
 
-	err = s.compileStatements()
+	err = s.compileStatements(funcType)
 	if err != nil {
 		return err
 	}
@@ -146,14 +146,10 @@ func (s *Service) compileSubroutineBody(funcName, funcType string) error {
 		return err
 	}
 
-	if funcType == "constructor" {
-		s.vmWriter.WritePush(vm.Pointer, 0)
-	}
-
 	return nil
 }
 
-func (s *Service) compileStatements() error {
+func (s *Service) compileStatements(funcType string) error {
 	for {
 		t, err := s.eatKeyword("let", "if", "while", "do", "return")
 		if err != nil {
@@ -170,7 +166,7 @@ func (s *Service) compileStatements() error {
 		case "do":
 			err = s.compileDoStatement(t)
 		case "return":
-			err = s.compileReturnStatement(t)
+			err = s.compileReturnStatement(t, funcType)
 		}
 
 		if err != nil {
@@ -212,7 +208,13 @@ func (s *Service) compileSubroutineCall() error {
 		return err
 	}
 
-	id := t.Identifier
+	var id, idHead string
+	var idTail tokenizer.Terminal
+
+	totalArgs := uint(0)
+
+	idHead = t.Identifier
+	targetClass := ""
 
 	t, err = s.eatSymbol(".", "(")
 	if err != nil {
@@ -221,12 +223,19 @@ func (s *Service) compileSubroutineCall() error {
 
 	switch sym := t.Symbol; sym {
 	case ".":
-		t, err = s.eatIdentifier()
+		idTail, err = s.eatIdentifier()
 		if err != nil {
 			return err
 		}
 
-		id += "." + t.Identifier
+		e := s.symbolTable.Get(idHead)
+		if e == nil {
+			targetClass = idHead
+		} else {
+			targetClass = e.Type
+			totalArgs = 1
+			s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
+		}
 
 		t, err = s.eatSymbol("(")
 		if err != nil {
@@ -235,17 +244,27 @@ func (s *Service) compileSubroutineCall() error {
 
 		fallthrough
 	case "(":
+		if targetClass == "" {
+			id = s.className + "." + idHead
+			totalArgs = 1
+			s.vmWriter.WritePush(vm.Pointer, 0)
+		} else {
+			id = targetClass + "." + idTail.Identifier
+		}
+
 		nArgs, err := s.compileExpressionList()
 		if err != nil {
 			return err
 		}
+
+		totalArgs += nArgs
 
 		t, err = s.eatSymbol(")")
 		if err != nil {
 			return err
 		}
 
-		s.vmWriter.WriteCall(id, nArgs)
+		s.vmWriter.WriteCall(id, totalArgs)
 	}
 
 	return nil
@@ -268,6 +287,8 @@ func (s *Service) pushKeywordConstant(c string) {
 	case "true":
 		s.vmWriter.WritePush(vm.Const, 1)
 		s.vmWriter.WriteArithmetic(vm.Neg)
+	case "this":
+		s.vmWriter.WritePush(vm.Pointer, 0)
 	default:
 		s.vmWriter.WritePush(vm.Const, 0)
 	}
@@ -342,6 +363,8 @@ func (s *Service) compileTerm() error {
 			if err != nil {
 				return err
 			}
+
+			s.vmWriter.WriteArithmetic(t.VMUnOp())
 		}
 	}
 
@@ -367,14 +390,14 @@ func (s *Service) compileExpression() error {
 		case "/":
 			s.vmWriter.WriteCall("Math.divide", 2)
 		default:
-			s.vmWriter.WriteArithmetic(t.VMOp())
+			s.vmWriter.WriteArithmetic(t.VMBinOp())
 		}
 	}
 
 	return nil
 }
 
-func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
+func (s *Service) compileReturnStatement(t tokenizer.Terminal, funcType string) error {
 	_, err := s.eatSymbol(";")
 	if err != nil {
 		s.compileExpression()
@@ -385,6 +408,10 @@ func (s *Service) compileReturnStatement(t tokenizer.Terminal) error {
 	t, err = s.eatSymbol(";")
 	if err != nil {
 		return err
+	}
+
+	if funcType == "constructor" {
+		s.vmWriter.WritePush(vm.Pointer, 0)
 	}
 
 	s.vmWriter.WriteReturn()
@@ -437,7 +464,7 @@ func (s *Service) compileWhileStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	err = s.compileStatements()
+	err = s.compileStatements("")
 	if err != nil {
 		return err
 	}
@@ -481,7 +508,7 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 		return err
 	}
 
-	err = s.compileStatements()
+	err = s.compileStatements("")
 	if err != nil {
 		return err
 	}
@@ -502,7 +529,7 @@ func (s *Service) compileIfStatement(t tokenizer.Terminal) error {
 			return err
 		}
 
-		err = s.compileStatements()
+		err = s.compileStatements("")
 		if err != nil {
 			return err
 		}
@@ -533,6 +560,7 @@ func (s *Service) compileLetStatement(t tokenizer.Terminal) error {
 	}
 
 	if t.Symbol == "[" {
+		s.vmWriter.WritePush(e.Scope.ToVMMemSeg(), e.Idx)
 		err = s.compileExpression()
 		if err != nil {
 			return err
